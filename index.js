@@ -9,7 +9,7 @@ app.use(express.json());
 
 app.post("/criar-pagamento", async (req, res) => {
   try {
-    const tokenResponse = await axios.post("https://api.horsepay.com/oauth/token", {
+    const tokenResponse = await axios.post("https://api.horsepay.io/oauth/token", {
       client_id: process.env.HORSEPAY_CLIENT_ID,
       client_secret: process.env.HORSEPAY_CLIENT_SECRET,
       grant_type: "client_credentials"
@@ -18,7 +18,7 @@ app.post("/criar-pagamento", async (req, res) => {
     const accessToken = tokenResponse.data.access_token;
 
     const pagamento = await axios.post(
-      "https://api.horsepay.com/pix/create",
+      "https://api.horsepay.io/pix/create",
       {
         amount: 1000, // 10 reais em centavos
         description: "Pagamento de Teste",
