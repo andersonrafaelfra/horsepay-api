@@ -1,4 +1,3 @@
-// index.js (Render)
 const express = require("express");
 const axios = require("axios");
 const cors = require("cors");
@@ -6,7 +5,6 @@ require("dotenv").config();
 
 const app = express();
 
-// CORS – libere só seu domínio. (ou troque por app.use(cors()) para liberar geral)
 app.use(cors({
   origin: ["https://conteudo.lat", "https://www.conteudo.lat"],
   methods: ["POST", "GET", "OPTIONS"],
@@ -14,24 +12,39 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// ——— Config ———
 const BASE_URL = process.env.HORSEPAY_ENV === "sandbox"
-  ? "https://sandbox.horsepay.io" // ajuste se seu sandbox for diferente
-  : "https://api.horsepay.io";     // host correto
+  ? "https://sandbox.horsepay.io"
+  : "https://api.horsepay.io";
 
 const CLIENT_ID = process.env.HORSEPAY_CLIENT_ID;
 const CLIENT_SECRET = process.env.HORSEPAY_CLIENT_SECRET;
 
-// Rota de saúde (GET /) opcional
-app.get("/", (_req, res) => {
-  res.send("Horsepay API ok ✅");
-});
+app.get("/", (_req, res) => res.send("HorsePay API ok ✅"));
 
-// Cria pagamento PIX (R$ 10,00)
-app.post("/criar-pagamento", async (req, res) => {
+async function fetchToken() {
+  // Tentativa 1: Basic Auth (padrão OAuth2)
   try {
-    // 1) Token OAuth2
-    const tokenRes = await axios.post(
+    const basic = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString("base64");
+    const r1 = await axios.post(
+      `${BASE_URL}/oauth/token`,
+      new URLSearchParams({ grant_type: "client_credentials" }).toString(),
+      {
+        headers: {
+          "Authorization": `Basic ${basic}`,
+          "Content-Type": "application/x-www-form-urlencoded"
+        },
+        timeout: 15000
+      }
+    );
+    if (r1.data?.access_token) return r1.data.access_token;
+    console.warn("Token T1 sem access_token:", r1.data);
+  } catch (e) {
+    console.warn("Token T1 falhou:", e.response?.status, e.response?.data || e.message);
+  }
+
+  // Tentativa 2: client_id + client_secret no corpo
+  try {
+    const r2 = await axios.post(
       `${BASE_URL}/oauth/token`,
       new URLSearchParams({
         grant_type: "client_credentials",
@@ -40,16 +53,38 @@ app.post("/criar-pagamento", async (req, res) => {
       }).toString(),
       { headers: { "Content-Type": "application/x-www-form-urlencoded" }, timeout: 15000 }
     );
+    if (r2.data?.access_token) return r2.data.access_token;
+    console.warn("Token T2 sem access_token:", r2.data);
+  } catch (e) {
+    console.warn("Token T2 falhou:", e.response?.status, e.response?.data || e.message);
+  }
 
-    const accessToken = tokenRes.data?.access_token;
-    if (!accessToken) {
-      console.error("Sem access_token:", tokenRes.data);
-      return res.status(500).json({ success: false, error: "Falha ao obter token" });
-    }
+  // Tentativa 3: client_key + client_secret no corpo
+  try {
+    const r3 = await axios.post(
+      `${BASE_URL}/oauth/token`,
+      new URLSearchParams({
+        grant_type: "client_credentials",
+        client_key: CLIENT_ID,
+        client_secret: CLIENT_SECRET
+      }).toString(),
+      { headers: { "Content-Type": "application/x-www-form-urlencoded" }, timeout: 15000 }
+    );
+    if (r3.data?.access_token) return r3.data.access_token;
+    console.warn("Token T3 sem access_token:", r3.data);
+  } catch (e) {
+    console.warn("Token T3 falhou:", e.response?.status, e.response?.data || e.message);
+  }
 
-    // 2) Criar cobrança PIX
+  throw new Error("Falha para obter access_token (401) – revise CLIENT_ID/SECRET ou o formato exigido pela API.");
+}
+
+app.post("/criar-pagamento", async (req, res) => {
+  try {
+    const accessToken = await fetchToken();
+
     const payload = {
-      amount: 1000, // R$ 10,00 em centavos
+      amount: 1000, // R$ 10,00
       description: "Acesso Premium",
       customer: {
         name: "Cliente Anônimo",
@@ -70,31 +105,26 @@ app.post("/criar-pagamento", async (req, res) => {
       }
     );
 
-    // Respostas comuns (ajuste os campos conforme a API retornar)
     const d = pixRes.data || {};
     const resp = {
       success: true,
       qrCode: d.qr_code || d.qrCode || d.qrcode || d.qr || null,
       pixKey: d.payload || d.pix_key || d.pixKey || null,
       transactionId: d.id || d.transaction_id || null,
-      raw: d // útil pra depurar; remova em prod se quiser
+      raw: d
     };
 
     if (!resp.qrCode) {
-      console.error("Criou PIX mas não veio qrCode:", d);
+      console.error("PIX sem qrCode:", d);
       return res.status(500).json({ success: false, error: "PIX criado sem qrCode", data: d });
     }
 
     return res.json(resp);
-
   } catch (err) {
-    // logs ricos pra você ver no Render
-    const status = err.response?.status;
-    const data = err.response?.data;
-    console.error("Erro ao gerar pagamento:", { status, data, msg: err.message });
+    console.error("Erro ao gerar pagamento:", err.response?.status, err.response?.data || err.message);
     return res.status(500).json({
       success: false,
-      error: data?.error || data || err.message || "Erro ao gerar pagamento"
+      error: err.response?.data || err.message || "Erro ao gerar pagamento"
     });
   }
 });
